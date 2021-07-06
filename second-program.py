@@ -9,63 +9,48 @@
 # modified, propagated, or distributed except according to the terms contained
 # in the LICENSE file.
 
-
+from decimal import Decimal
 from bitcoinutils.setup import setup
 from bitcoinutils.utils import to_satoshis
-from bitcoinutils.transactions import Transaction, TxInput, TxOutput
-from bitcoinutils.keys import P2pkhAddress, PrivateKey
+from bitcoinutils.transactions import Transaction, TxInput, TxOutput, Sequence
+from bitcoinutils.constants import TYPE_RELATIVE_TIMELOCK
+from bitcoinutils.keys import P2pkhAddress, P2wshAddress, PrivateKey, P2shAddress
 from bitcoinutils.script import Script
+from bitcoinutils.proxy import NodeProxy
+
+import sys
 
 
 def main():
-    # always remember to setup the network
-    setup('testnet')
+    setup('regtest')
+    proxy = NodeProxy('bitcoin', 'J9JkYnPiXWqgRzg3vAA').get_proxy()
+    toPrivKey = PrivateKey(
+        'cV1BXriUYr4y45waKc1Zz8MXRUC61MdNa4NH7nXS4moPXihe4S1Q')
+    toPublicKey = toPrivKey.get_public_key()
+    txId = '19b4e5032ec10746efeb7299d2c1b8cdddd1b011f5e494158a43f648cf0f5206'
+    txVout = 0
+    txin = TxInput(txId, txVout)
+    utxo = proxy.gettxout(txId, txVout)
+    print(utxo)
+    minerFee = Decimal(0.001)
+    amount = to_satoshis(utxo['value'] - minerFee)
+    txout = TxOutput(
+        amount,  toPrivKey.get_public_key().get_address().to_script_pub_key())
+    tx = Transaction([txin], [txout], has_segwit=True)
 
-    # create transaction input from tx id of UTXO (contained 0.4 tBTC)
-    txin = TxInput(
-        'fb48f4e23bf6ddf606714141ac78c3e921c8c0bebeb7c8abb2c799e9ff96ce6c', 0)
+    relative_blocks = 10
+    seq = Sequence(TYPE_RELATIVE_TIMELOCK, relative_blocks)
+    redeem_script = Script([seq.for_script(), 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP',
+                           'OP_DUP', 'OP_HASH160', toPublicKey.get_segwit_address().to_hash(), 'OP_EQUALVERIFY', 'OP_CHECKSIG'])
 
-    # create transaction output using P2PKH scriptPubKey (locking script)
-    addr = P2pkhAddress('n4bkvTyU1dVdzsrhWBqBw8fEMbHjJvtmJR')
-    txout = TxOutput(to_satoshis(0.1), Script(['OP_DUP', 'OP_HASH160', addr.to_hash160(),
-                                               'OP_EQUALVERIFY', 'OP_CHECKSIG']))
-
-    # create another output to get the change - remaining 0.01 is tx fees
-    # note that this time we used to_script_pub_key() to create the P2PKH
-    # script
-    change_addr = P2pkhAddress('mmYNBho9BWQB2dSniP1NJvnPoj5EVWw89w')
-    change_txout = TxOutput(to_satoshis(0.29), change_addr.to_script_pub_key())
-    # change_txout = TxOutput(to_satoshis(0.29), Script(['OP_DUP', 'OP_HASH160',
-    #                                     change_addr.to_hash160(),
-    #                                     'OP_EQUALVERIFY', 'OP_CHECKSIG']))
-
-    # create transaction from inputs/outputs -- default locktime is used
-    tx = Transaction([txin], [txout, change_txout])
-
-    # print raw transaction
-    print("\nRaw unsigned transaction:\n" + tx.serialize())
-
-    # use the private key corresponding to the address that contains the
-    # UTXO we are trying to spend to sign the input
-    sk = PrivateKey('cRvyLwCPLU88jsyj94L7iJjQX5C2f8koG4G2gevN4BeSGcEvfKe9')
-
-    # note that we pass the scriptPubkey as one of the inputs of sign_input
-    # because it is used to replace the scriptSig of the UTXO we are trying to
-    # spend when creating the transaction digest
-    from_addr = P2pkhAddress('myPAE9HwPeKHh8FjKwBNBaHnemApo3dw6e')
-    sig = sk.sign_input(tx, 0, Script(['OP_DUP', 'OP_HASH160',
-                                       from_addr.to_hash160(), 'OP_EQUALVERIFY',
-                                       'OP_CHECKSIG']))
-    # print(sig)
-
-    # get public key as hex
-    pk = sk.get_public_key().to_hex()
-
-    # set the scriptSig (unlocking script)
-    txin.script_sig = Script([sig, pk])
-    signed_tx = tx.serialize()
-    # print raw signed transaction ready to be broadcasted
-    print("\nRaw signed transaction:\n" + signed_tx)
+    sig = toPrivKey.sign_segwit_input(
+        tx, 0, redeem_script, to_satoshis(utxo['value']))
+    tx.witnesses.append(
+        Script([sig, redeem_script.to_hex()]))
+    print("\nRaw transaction:\n" + tx.serialize())
+    print("\nRaw signed transaction:\n" + tx.serialize())
+    print("\nTxId:", tx.get_txid())
+    proxy.sendrawtransaction(tx.serialize())
 
 
 if __name__ == "__main__":
