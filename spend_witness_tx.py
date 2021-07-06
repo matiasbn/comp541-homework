@@ -20,39 +20,40 @@ from bitcoinutils.utils import to_bytes, to_satoshis
 from bitcoinutils.transactions import Transaction, TxInput, TxOutput, Sequence
 from bitcoinutils.constants import TYPE_RELATIVE_TIMELOCK
 
+# This program assumes that regtest implements segwit
+
 
 def main():
     pp = pprint.PrettyPrinter(depth=6)
-    # always remember to setup the network
     setup('regtest')
+    # The spender private key, the txId and the output id to lock in the p2sh address
+    fromPrivateKey = 'cPfLev7BCA48m2NKhmeYDYyTKzkCCTkWHM2JKDwPkwVUQi33krXF'
+    txId = '98ef60879bf183b778b883a8a695b875cca0341e503dad21cf1dc9050eb761cf'
+    txVout = 0
 
-    # get a node proxy using default host and port
-    proxy = NodeProxy('bitcoin', 'J9JkYnPiXWqgRzg3vAA').get_proxy()
+    # the receiver address and the block height to lock funds
+    toPublicKey = PublicKey(
+        '02f5dda832bf11ce1ea14e527a00881cb1979f074cfc3a2098ff4466973f10546b')
+    block_height = 10
 
-    # create transaction input from tx id of UTXO (contained 0.4 tBTC)
+    rpcuser = 'bitcoin'
+    rpcpass = 'J9JkYnPiXWqgRzg3vAA'
+    proxy = NodeProxy(rpcuser, rpcpass).get_proxy()
 
     # Replace with the corresponding pks
-    fromPrivKey = PrivateKey(
-        'cPfLev7BCA48m2NKhmeYDYyTKzkCCTkWHM2JKDwPkwVUQi33krXF')
+    fromPrivKey = PrivateKey(fromPrivateKey)
     fromAddress = fromPrivKey.get_public_key()
 
-    txId = '5d740508744e70618d992037735ce18c17c9be196f27be4d30bb6af434084983'
-    txVout = 0
     txin = TxInput(txId, 0)
     utxo = proxy.gettxout(txId, txVout)
     pp.pprint(utxo)
     minerFee = Decimal(0.001)
     amount = to_satoshis(utxo['value'] - minerFee)
 
-    relative_blocks = 10
-    seq = Sequence(TYPE_RELATIVE_TIMELOCK, relative_blocks)
-    toPrivKey = PrivateKey(
-        'cV1BXriUYr4y45waKc1Zz8MXRUC61MdNa4NH7nXS4moPXihe4S1Q')
-    toPublicKey = toPrivKey.get_public_key()
+    seq = Sequence(TYPE_RELATIVE_TIMELOCK, block_height)
     redeem_script = Script([seq.for_script(), 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP',
                            'OP_DUP', 'OP_HASH160', toPublicKey.to_hash160(), 'OP_EQUALVERIFY', 'OP_CHECKSIG'])
-    print(redeem_script.to_p2wsh_script_pub_key())
-    txOut = TxOutput(amount, redeem_script.to_p2wsh_script_pub_key())
+    txOut = TxOutput(amount, redeem_script.to_p2sh_script_pub_key())
 
     tx = Transaction([txin], [txOut], has_segwit=True)
 

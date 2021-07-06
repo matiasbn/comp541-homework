@@ -23,33 +23,46 @@ import sys
 
 def main():
     setup('regtest')
-    proxy = NodeProxy('bitcoin', 'J9JkYnPiXWqgRzg3vAA').get_proxy()
-    toPrivKey = PrivateKey(
-        'cV1BXriUYr4y45waKc1Zz8MXRUC61MdNa4NH7nXS4moPXihe4S1Q')
+    rpcuser = 'bitcoin'
+    rpcpass = 'J9JkYnPiXWqgRzg3vAA'
+    p2sh_address = '2N6RCyV7TnhyfLWzsSAKtzJniTkhmACRXZr'
+    block_height = 10
+    # Corresponding to the address that has the funds locked in the p2sh address
+    toPrivateKey = 'cV1BXriUYr4y45waKc1Zz8MXRUC61MdNa4NH7nXS4moPXihe4S1Q'
+
+    proxy = NodeProxy(rpcuser, rpcpass).get_proxy()
+    p2sh_address = P2shAddress(p2sh_address)
+    p2sh_utxos = proxy.listunspent(0, 999999, [p2sh_address.to_string()])
+    seq = Sequence(TYPE_RELATIVE_TIMELOCK, block_height)
+
+    # Get amount and txin
+    amount = 0
+    txins = []
+    for utxo in p2sh_utxos:
+        amount += utxo['amount']
+        txins.append(TxInput(utxo['txid'], utxo['vout'],
+                             sequence=seq.for_input_sequence()))
+
+    toPrivKey = PrivateKey(toPrivateKey)
     toPublicKey = toPrivKey.get_public_key()
-    txId = '19b4e5032ec10746efeb7299d2c1b8cdddd1b011f5e494158a43f648cf0f5206'
-    txVout = 0
-    txin = TxInput(txId, txVout)
-    utxo = proxy.gettxout(txId, txVout)
-    print(utxo)
-    minerFee = Decimal(0.001)
-    amount = to_satoshis(utxo['value'] - minerFee)
-    txout = TxOutput(
-        amount,  toPrivKey.get_public_key().get_address().to_script_pub_key())
-    tx = Transaction([txin], [txout], has_segwit=True)
 
-    relative_blocks = 10
-    seq = Sequence(TYPE_RELATIVE_TIMELOCK, relative_blocks)
     redeem_script = Script([seq.for_script(), 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP',
-                           'OP_DUP', 'OP_HASH160', toPublicKey.get_segwit_address().to_hash(), 'OP_EQUALVERIFY', 'OP_CHECKSIG'])
+                           'OP_DUP', 'OP_HASH160', toPublicKey.get_address().to_hash160(), 'OP_EQUALVERIFY', 'OP_CHECKSIG'])
 
-    sig = toPrivKey.sign_segwit_input(
-        tx, 0, redeem_script, to_satoshis(utxo['value']))
-    tx.witnesses.append(
-        Script([sig, redeem_script.to_hex()]))
+    minerFee = Decimal(0.001)
+    txout = TxOutput(to_satoshis(amount - minerFee),
+                     toPublicKey.get_address().to_script_pub_key())
+    tx = Transaction(txins, [txout])
+
+    for index, txin in enumerate(txins):
+        sig = toPrivKey.sign_input(tx, index, redeem_script)
+        txin.script_sig = Script(
+            [sig, toPublicKey.to_hex(), redeem_script.to_hex()])
+
     print("\nRaw transaction:\n" + tx.serialize())
     print("\nRaw signed transaction:\n" + tx.serialize())
     print("\nTxId:", tx.get_txid())
+    print("Amount redeemed: " + str(amount) + " BTC")
     proxy.sendrawtransaction(tx.serialize())
 
 
